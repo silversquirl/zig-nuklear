@@ -1,5 +1,5 @@
-ctx: c.nk_context,
-atlas: c.nk_font_atlas,
+ctx: nuklear.Context,
+atlas: nuklear.FontAtlas,
 
 pipe: *mach.gpu.RenderPipeline,
 uniform_buf: *mach.gpu.Buffer,
@@ -85,21 +85,18 @@ pub fn init(app: *App) !void {
     app.vertex_buf = .{ .usage = .{ .copy_dst = true, .vertex = true } };
     app.index_buf = .{ .usage = .{ .copy_dst = true, .index = true } };
 
-    c.nk_font_atlas_init_default(&app.atlas);
-    errdefer c.nk_font_atlas_clear(&app.atlas);
-    c.nk_font_atlas_begin(&app.atlas);
-    const font: *c.nk_font = c.nk_font_atlas_add_default(&app.atlas, 13, null);
+    app.atlas = nuklear.FontAtlas.initDefault();
+    errdefer app.atlas.clear();
+    app.atlas.begin();
+    const font = app.atlas.addDefault(13, null);
     {
-        var width: c_int = undefined;
-        var height: c_int = undefined;
-        const data_ptr: [*]const u8 = @ptrCast(@alignCast(c.nk_font_atlas_bake(&app.atlas, &width, &height, c.NK_FONT_ATLAS_ALPHA8)));
-        const data = data_ptr[0..@intCast(width * height)];
+        const data, const width, const height = app.atlas.bake(.alpha8);
 
         const tex = mach.device.createTexture(&.{
             .label = "nuklear font atlas texture",
             .size = .{
-                .width = @intCast(width),
-                .height = @intCast(height),
+                .width = width,
+                .height = height,
             },
             .format = .r8_unorm,
             .usage = .{
@@ -112,12 +109,12 @@ pub fn init(app: *App) !void {
         mach.queue.writeTexture(
             &.{ .texture = tex },
             &.{
-                .bytes_per_row = @intCast(width),
-                .rows_per_image = @intCast(height),
+                .bytes_per_row = width,
+                .rows_per_image = height,
             },
             &.{
-                .width = @intCast(width),
-                .height = @intCast(height),
+                .width = width,
+                .height = height,
             },
             data,
         );
@@ -135,16 +132,13 @@ pub fn init(app: *App) !void {
             },
         }));
     }
-    c.nk_font_atlas_end(&app.atlas, c.nk_handle_ptr(app.atlas_bind), null);
-
-    if (!c.nk_init_default(&app.ctx, &font.handle)) {
-        return error.NuklearInit;
-    }
+    app.atlas.end(.{ .ptr = app.atlas_bind }, null);
+    app.ctx = nuklear.Context.initDefault(font.handle());
 }
 
 pub fn deinit(app: *App) void {
-    c.nk_free(&app.ctx);
-    c.nk_font_atlas_clear(&app.atlas);
+    app.ctx.free();
+    app.atlas.clear();
 
     app.pipe.release();
     app.uniform_buf.release();
@@ -157,55 +151,57 @@ pub fn deinit(app: *App) void {
 }
 
 pub fn update(app: *App) !bool {
-    defer c.nk_clear(&app.ctx);
+    defer app.ctx.clear();
 
     // Process input
-    var it = mach.pollEvents();
-    c.nk_input_begin(&app.ctx);
-    while (it.next()) |event| {
-        switch (event) {
-            .close => return true,
+    {
+        var it = mach.pollEvents();
+        const in = app.ctx.input();
+        defer in.end();
+        while (it.next()) |event| {
+            switch (event) {
+                .close => return true,
 
-            .key_press => |ev| if (nuklearKey(ev.key)) |key| {
-                c.nk_input_key(&app.ctx, key, true);
-            },
-            .key_release => |ev| if (nuklearKey(ev.key)) |key| {
-                c.nk_input_key(&app.ctx, key, true);
-            },
-            .char_input => |ev| c.nk_input_unicode(&app.ctx, ev.codepoint),
+                .key_press => |ev| if (nuklearKey(ev.key)) |key| {
+                    in.key(key, true);
+                },
+                .key_release => |ev| if (nuklearKey(ev.key)) |key| {
+                    in.key(key, false);
+                },
+                .char_input => |ev| in.unicode(ev.codepoint),
 
-            .mouse_motion => |ev| c.nk_input_motion(&app.ctx, @intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y)),
-            .mouse_press => |ev| if (nuklearButton(ev.button)) |btn| {
-                c.nk_input_button(&app.ctx, btn, @intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y), true);
-            },
-            .mouse_release => |ev| if (nuklearButton(ev.button)) |btn| {
-                c.nk_input_button(&app.ctx, btn, @intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y), false);
-            },
-            .mouse_scroll => |ev| c.nk_input_scroll(&app.ctx, .{ .x = ev.xoffset, .y = ev.yoffset }),
+                .mouse_motion => |ev| in.motion(@intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y)),
+                .mouse_press => |ev| if (nuklearButton(ev.button)) |btn| {
+                    in.button(btn, @intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y), true);
+                },
+                .mouse_release => |ev| if (nuklearButton(ev.button)) |btn| {
+                    in.button(btn, @intFromFloat(ev.pos.x), @intFromFloat(ev.pos.y), false);
+                },
+                .mouse_scroll => |ev| in.scroll(.{ .x = ev.xoffset, .y = ev.yoffset }),
 
-            else => {},
+                else => {},
+            }
         }
     }
-    c.nk_input_end(&app.ctx);
 
     // Update UI
-    if (c.nk_begin(
-        &app.ctx,
-        "Hello",
-        .{ .x = 0, .y = 0, .w = 100, .h = 200 },
-        c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE | c.NK_WINDOW_MINIMIZABLE,
-    )) {
-        c.nk_layout_row_dynamic(&app.ctx, 30, 1);
-        if (c.nk_button_label(&app.ctx, "Click me!")) {
+    if (app.ctx.begin("Hello", .{ .x = 0, .y = 0, .w = 100, .h = 200 }, .{
+        .border = true,
+        .movable = true,
+        .scalable = true,
+        .minimizable = true,
+    })) |win| {
+        defer win.end();
+        win.layoutRowDynamic(30, 1);
+        if (win.buttonText("Click me!")) {
             std.log.info("Hello from Nuklear!", .{});
         }
     }
-    c.nk_end(&app.ctx);
 
     // Draw
-    const cfg: c.nk_convert_config = .{
-        .shape_AA = c.NK_ANTI_ALIASING_ON,
-        .line_AA = c.NK_ANTI_ALIASING_ON,
+    const cfg: nuklear.c.nk_convert_config = .{
+        .shape_AA = nuklear.c.NK_ANTI_ALIASING_ON,
+        .line_AA = nuklear.c.NK_ANTI_ALIASING_ON,
         .vertex_layout = &nk_vertex_layout,
         .vertex_size = vertex_size,
         .vertex_alignment = 2 * @alignOf(f32),
@@ -214,34 +210,24 @@ pub fn update(app: *App) !bool {
         .arc_segment_count = 22,
         .global_alpha = 1.0,
         .tex_null = .{
-            .texture = c.nk_handle_ptr(app.null_bind),
+            .texture = .{ .ptr = app.null_bind },
             .uv = .{ .x = 0, .y = 0 },
         },
     };
 
-    var cmds: c.nk_buffer = undefined;
-    var verts: c.nk_buffer = undefined;
-    var idx: c.nk_buffer = undefined;
-    c.nk_buffer_init_default(&cmds);
-    c.nk_buffer_init_default(&verts);
-    c.nk_buffer_init_default(&idx);
+    var cmds = nuklear.Buffer.initDefault();
+    var verts = nuklear.Buffer.initDefault();
+    var idx = nuklear.Buffer.initDefault();
     defer {
-        c.nk_buffer_free(&cmds);
-        c.nk_buffer_free(&verts);
-        c.nk_buffer_free(&idx);
+        cmds.free();
+        verts.free();
+        idx.free();
     }
 
-    switch (c.nk_convert(&app.ctx, &cmds, &verts, &idx, &cfg)) {
-        c.NK_CONVERT_SUCCESS => {},
-        c.NK_CONVERT_INVALID_PARAM => unreachable,
-        c.NK_CONVERT_COMMAND_BUFFER_FULL => return error.OutOfMemory,
-        c.NK_CONVERT_VERTEX_BUFFER_FULL => return error.OutOfMemory,
-        c.NK_CONVERT_ELEMENT_BUFFER_FULL => return error.OutOfMemory,
-        else => unreachable,
-    }
+    try nuklear.vertex.convert(&app.ctx, &cmds, &verts, &idx, &cfg);
 
-    std.debug.assert(idx.size >= verts.size);
-    if (idx.size > 0) {
+    std.debug.assert(idx.size() >= verts.size());
+    if (idx.size() > 0) {
         app.vertex_buf.upload(mach.queue, &verts);
         app.index_buf.upload(mach.queue, &idx);
 
@@ -259,10 +245,8 @@ pub fn update(app: *App) !bool {
         const view = mach.swap_chain.getCurrentTextureView().?;
 
         var elem_idx: u32 = 0;
-        var command: ?*const c.nk_draw_command = c.nk__draw_begin(&app.ctx, &cmds);
-        while (command) |cmd| : (command = c.nk__draw_next(command, &cmds, &app.ctx)) {
-            if (cmd.elem_count == 0) continue;
-
+        var it = nuklear.vertex.iterator(&app.ctx, &cmds);
+        while (it.next()) |cmd| {
             const pass = enc.beginRenderPass(&mach.gpu.RenderPassDescriptor.init(.{
                 .color_attachments = &.{.{
                     .view = view,
@@ -297,7 +281,7 @@ const Uniforms = extern struct {
     fb_size: [2]f32 align(8),
 };
 
-fn clampRect(rect: c.struct_nk_rect, size: mach.Size) struct { x: u32, y: u32, w: u32, h: u32 } {
+fn clampRect(rect: nuklear.Rect, size: mach.Size) struct { x: u32, y: u32, w: u32, h: u32 } {
     const x: u32 = @intFromFloat(@max(0, rect.x));
     const y: u32 = @intFromFloat(@max(0, rect.y));
     const w: u32 = @intFromFloat(@max(0, rect.w));
@@ -311,54 +295,33 @@ fn clampRect(rect: c.struct_nk_rect, size: mach.Size) struct { x: u32, y: u32, w
     };
 }
 
-fn nuklearKey(key: mach.Key) ?c.nk_keys {
+fn nuklearKey(key: mach.Key) ?nuklear.Key {
     return switch (key) {
-        .left_shift => c.NK_KEY_SHIFT,
-        .right_shift => c.NK_KEY_SHIFT,
-        .left_control => c.NK_KEY_CTRL,
-        .right_control => c.NK_KEY_CTRL,
-        .delete => c.NK_KEY_DEL,
-        .enter => c.NK_KEY_ENTER,
-        .kp_enter => c.NK_KEY_ENTER,
-        .tab => c.NK_KEY_TAB,
-        .backspace => c.NK_KEY_BACKSPACE,
-        // NK_KEY_COPY,
-        // NK_KEY_CUT,
-        // NK_KEY_PASTE,
-        .up => c.NK_KEY_UP,
-        .down => c.NK_KEY_DOWN,
-        .left => c.NK_KEY_LEFT,
-        .right => c.NK_KEY_RIGHT,
+        .left_shift => .shift,
+        .right_shift => .shift,
+        .left_control => .ctrl,
+        .right_control => .ctrl,
+        .delete => .del,
+        .enter => .enter,
+        .kp_enter => .enter,
+        .tab => .tab,
+        .backspace => .backspace,
+        .up => .up,
+        .down => .down,
+        .left => .left,
+        .right => .right,
 
-        // TODO: implement these actions
-        // Shortcuts: text field
-        // NK_KEY_TEXT_INSERT_MODE,
-        // NK_KEY_TEXT_REPLACE_MODE,
-        // NK_KEY_TEXT_RESET_MODE,
-        .home => c.NK_KEY_TEXT_LINE_START,
-        .end => c.NK_KEY_TEXT_LINE_END,
-        // NK_KEY_TEXT_START,
-        // NK_KEY_TEXT_END,
-        // NK_KEY_TEXT_UNDO,
-        // NK_KEY_TEXT_REDO,
-        // NK_KEY_TEXT_SELECT_ALL,
-        // NK_KEY_TEXT_WORD_LEFT,
-        // NK_KEY_TEXT_WORD_RIGHT,
-
-        // Shortcuts: scrollbar
-        // NK_KEY_SCROLL_START,
-        // NK_KEY_SCROLL_END,
-        // NK_KEY_SCROLL_DOWN,
-        // NK_KEY_SCROLL_UP,
+        .home => .text_line_start,
+        .end => .text_line_end,
 
         else => null,
     };
 }
-fn nuklearButton(btn: mach.MouseButton) ?c.nk_buttons {
+fn nuklearButton(btn: mach.MouseButton) ?nuklear.Button {
     return switch (btn) {
-        .left => c.NK_BUTTON_LEFT,
-        .right => c.NK_BUTTON_RIGHT,
-        .middle => c.NK_BUTTON_MIDDLE,
+        .left => .left,
+        .right => .right,
+        .middle => .middle,
         // TODO: double click
         else => null,
     };
@@ -374,15 +337,10 @@ const wgpu_vertex_layout = mach.gpu.VertexBufferLayout.init(.{
     },
 });
 
-const nk_vertex_layout = [_:vertex_layout_end]c.nk_draw_vertex_layout_element{
-    .{ .attribute = c.NK_VERTEX_POSITION, .format = c.NK_FORMAT_FLOAT, .offset = 0 },
-    .{ .attribute = c.NK_VERTEX_TEXCOORD, .format = c.NK_FORMAT_FLOAT, .offset = @sizeOf(f32) * 2 },
-    .{ .attribute = c.NK_VERTEX_COLOR, .format = c.NK_FORMAT_R8G8B8A8, .offset = @sizeOf(f32) * (2 + 2) },
-};
-const vertex_layout_end: c.nk_draw_vertex_layout_element = .{
-    .attribute = c.NK_VERTEX_ATTRIBUTE_COUNT,
-    .format = c.NK_FORMAT_COUNT,
-    .offset = 0,
+const nk_vertex_layout = [_:nuklear.vertex.layout_end]nuklear.vertex.LayoutElement{
+    .{ .attribute = nuklear.c.NK_VERTEX_POSITION, .format = nuklear.c.NK_FORMAT_FLOAT, .offset = 0 },
+    .{ .attribute = nuklear.c.NK_VERTEX_TEXCOORD, .format = nuklear.c.NK_FORMAT_FLOAT, .offset = @sizeOf(f32) * 2 },
+    .{ .attribute = nuklear.c.NK_VERTEX_COLOR, .format = nuklear.c.NK_FORMAT_R8G8B8A8, .offset = @sizeOf(f32) * (2 + 2) },
 };
 
 const NkGpuBuf = struct {
@@ -394,14 +352,14 @@ const NkGpuBuf = struct {
         if (buf.buf) |b| b.release();
     }
 
-    pub fn upload(buf: *NkGpuBuf, queue: *mach.gpu.Queue, nk_buf: *c.nk_buffer) void {
-        if (buf.size < nk_buf.size) {
+    pub fn upload(buf: *NkGpuBuf, queue: *mach.gpu.Queue, nk_buf: *nuklear.Buffer) void {
+        if (buf.size < nk_buf.size()) {
             if (buf.buf) |b| b.release();
 
             // Increase capacity
             while (true) {
                 buf.size +|= buf.size / 2 + 8;
-                if (buf.size >= nk_buf.size) break;
+                if (buf.size >= nk_buf.size()) break;
             }
 
             // Allocate new buffer
@@ -412,8 +370,8 @@ const NkGpuBuf = struct {
         }
 
         // Upload data
-        const data: [*]const u8 = @ptrCast(c.nk_buffer_memory_const(nk_buf));
-        queue.writeBuffer(buf.buf.?, 0, data[0..nk_buf.size]);
+        const data = nk_buf.memoryConst(u8);
+        queue.writeBuffer(buf.buf.?, 0, data);
     }
 };
 
@@ -421,4 +379,4 @@ pub const App = @This();
 
 const std = @import("std");
 const mach = @import("mach").core;
-const c = @import("nuklear").c;
+const nuklear = @import("nuklear");
