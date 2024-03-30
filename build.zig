@@ -2,7 +2,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const link_libc = b.option(bool, "link_libc", "Use libc for memory allocation and string formatting") orelse false;
+    const link_libc = b.option(bool, "link_libc", "Use libc for memory allocation, string formatting, and loading files") orelse false;
 
     const config = b.addConfigHeader(.{}, .{
         // These are always available, regardless of whether libc is linked
@@ -39,6 +39,19 @@ pub fn build(b: *std.Build) void {
     });
     if (link_libc) lib.linkLibC();
     b.installArtifact(lib);
+
+    const mod = b.addModule("nuklear", .{
+        .root_source_file = .{ .path = "src/bindings.zig" },
+    });
+    mod.addConfigHeader(config);
+    mod.addIncludePath(.{ .path = "src" });
+    mod.linkLibrary(lib);
+
+    const test_step = b.addTest(.{
+        .root_source_file = .{ .path = "src/bindings.zig" },
+    });
+    test_step.linkLibrary(lib);
+    b.getInstallStep().dependOn(&b.addRunArtifact(test_step).step);
 }
 
 // Returns ?void rather than bool because ConfigHeader is silly

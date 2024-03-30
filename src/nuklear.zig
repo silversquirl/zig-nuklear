@@ -2,7 +2,7 @@
 
 comptime {
     // 2 plus 2 is 4, minus 1 that's 3 quick maths
-    @setFloatMode(.optimized);
+    @setFloatMode(.Optimized);
 }
 
 export fn zig_nuklear_assert(x: bool) void {
