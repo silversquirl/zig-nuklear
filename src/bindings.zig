@@ -202,6 +202,10 @@ pub const Buffer = struct {
         c.nk_buffer_free(&buf.c);
     }
 
+    pub fn clear(buf: *Buffer) void {
+        c.nk_buffer_clear(&buf.c);
+    }
+
     pub inline fn size(buf: Buffer) usize {
         return buf.c.size;
     }
@@ -345,3 +349,4 @@ const std = @import("std");
 pub const c = @cImport({
     @cInclude("nuklear.h");
 });
+pub const mach = @import("mach.zig");
