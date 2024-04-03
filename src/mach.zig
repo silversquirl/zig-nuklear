@@ -266,22 +266,23 @@ pub const Draw = struct {
             const enc = opts.device.createCommandEncoder(&.{});
             defer enc.release();
 
+            const pass = enc.beginRenderPass(&gpu.RenderPassDescriptor.init(.{
+                .color_attachments = &.{.{
+                    .view = opts.target,
+                    .load_op = .clear,
+                    .store_op = .store,
+                    .clear_value = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                }},
+            }));
+            defer pass.release();
+            pass.setPipeline(state.pipe);
+            const index_format: gpu.IndexFormat = if (nuklear.feature.draw_index_32bit) .uint32 else .uint16;
+            pass.setIndexBuffer(state.index_buf.buf.?, index_format, 0, state.index_buf.size);
+            pass.setVertexBuffer(0, state.vertex_buf.buf.?, 0, state.vertex_buf.size);
+
             var elem_idx: u32 = 0;
             var it = nuklear.vertex.iterator(opts.ctx, &state.cmds);
             while (it.next()) |cmd| {
-                const pass = enc.beginRenderPass(&gpu.RenderPassDescriptor.init(.{
-                    .color_attachments = &.{.{
-                        .view = opts.target,
-                        .load_op = if (elem_idx == 0) .clear else .load,
-                        .store_op = .store,
-                        .clear_value = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    }},
-                }));
-                defer pass.end();
-                pass.setPipeline(state.pipe);
-                const index_format: gpu.IndexFormat = if (nuklear.feature.draw_index_32bit) .uint32 else .uint16;
-                pass.setIndexBuffer(state.index_buf.buf.?, index_format, 0, state.index_buf.size);
-                pass.setVertexBuffer(0, state.vertex_buf.buf.?, 0, state.vertex_buf.size);
                 const scissor = clampRect(cmd.clip_rect, opts.framebuffer_size);
                 pass.setScissorRect(scissor.x, scissor.y, scissor.w, scissor.h);
                 pass.setBindGroup(0, @ptrCast(cmd.texture.ptr), null);
@@ -290,6 +291,7 @@ pub const Draw = struct {
                 elem_idx += cmd.elem_count;
             }
 
+            pass.end();
             const cmd = enc.finish(null);
             defer cmd.release();
             opts.queue.submit(&.{cmd});
