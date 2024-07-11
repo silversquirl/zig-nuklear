@@ -27,28 +27,28 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addStaticLibrary(.{
         .name = "nuklear",
-        .root_source_file = .{ .path = "src/nuklear.zig" },
+        .root_source_file = b.path("src/nuklear.zig"),
         .target = target,
         .optimize = optimize,
     });
     lib.addConfigHeader(config);
-    lib.addIncludePath(.{ .path = "src" });
+    lib.addIncludePath(b.path("src"));
     lib.addCSourceFile(.{
-        .file = .{ .path = "src/nuklear.c" },
+        .file = b.path("src/nuklear.c"),
         .flags = &.{ "-std=c11", "-Wall", "-Werror", "-Wno-unused-function" },
     });
     if (link_libc) lib.linkLibC();
     b.installArtifact(lib);
 
     const mod = b.addModule("nuklear", .{
-        .root_source_file = .{ .path = "src/bindings.zig" },
+        .root_source_file = b.path("src/bindings.zig"),
     });
     mod.addConfigHeader(config);
-    mod.addIncludePath(.{ .path = "src" });
+    mod.addIncludePath(b.path("src"));
     mod.linkLibrary(lib);
 
     const test_step = b.addTest(.{
-        .root_source_file = .{ .path = "src/bindings.zig" },
+        .root_source_file = b.path("src/bindings.zig"),
     });
     test_step.linkLibrary(lib);
     b.getInstallStep().dependOn(&b.addRunArtifact(test_step).step);

@@ -156,7 +156,7 @@ pub const FontAtlas = extern struct {
         }
 
         const font = c.nk_font_atlas_add_default(&atlas.c, size, config);
-        return @fieldParentPtr(Font, "c", font);
+        return @fieldParentPtr("c", font);
     }
 
     pub fn bake(atlas: *FontAtlas, comptime format: Format) struct { []const format.Pixel(), u31, u31 } {
